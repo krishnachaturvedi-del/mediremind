@@ -1,12 +1,14 @@
 // Generates prisma/schema.postgres.prisma from prisma/schema.prisma by swapping
 // only the datasource provider line, so the two schemas cannot drift apart.
 //
+// Plain Node (no TypeScript, no dependencies) on purpose: this runs during the
+// production build, where devDependencies such as tsx are not installed.
+//
 // Usage (from server/): npm run db:use:postgres
-import fs from "node:fs";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
+const fs = require("node:fs");
+const path = require("node:path");
 
-const prismaDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../prisma");
+const prismaDir = path.resolve(__dirname, "../prisma");
 const src = path.join(prismaDir, "schema.prisma");
 const dest = path.join(prismaDir, "schema.postgres.prisma");
 

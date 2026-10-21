@@ -79,8 +79,10 @@ DATABASE_URL="postgresql://..." npx tsx scripts/provision-chemist.ts
 
 | Symptom | Cause / fix |
 |---|---|
+| `sh: 1: tsx: not found` during build | A build script used `tsx` (a devDependency). Production builds omit devDependencies; build scripts must run on plain Node. |
 | `Invalid production configuration` on boot | `DATABASE_URL` is not a Postgres URL, or `SESSION_SECRET` is unset. |
 | Login works, then you are logged out on refresh | `CORS_ORIGIN` does not exactly match the client origin, or `COOKIE_SAME_SITE` is not `none`. |
 | API calls fail with CORS errors | Client origin missing from `CORS_ORIGIN` (comma-separated, no trailing slash). |
 | CSV download saves an HTML file | `VITE_API_BASE_URL` was not set when the client was built; rebuild the client. |
 | Tables missing | The build's `db:push:postgres` step did not run; check the Render build log. |
+| `prisma: not found` during build | The `prisma` CLI must be a **production** dependency (it is, in `server/package.json`); if moved back to devDependencies the build will fail. |

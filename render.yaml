@@ -18,13 +18,23 @@ services:
     plan: free
     region: frankfurt
     rootDir: .
-    # Install both workspaces, generate the Postgres Prisma client, build the
-    # server, then push the schema to the database before starting.
+    # Build order matters:
+    #  1. npm ci              - install everything, including devDependencies.
+    #  2. db:use:postgres     - write schema.postgres.prisma from schema.prisma.
+    #  3. db:generate:postgres- generate the Prisma client for that schema.
+    #     MUST run before tsc: the server imports generated types (User, etc.).
+    #  4. build -w server     - compile with tsc (needs @types/*, hence step 1).
+    #  5. npm prune --omit=dev- drop devDependencies for a lean runtime image.
+    #  6. db:push:postgres    - create tables (uses the prisma production dep).
+    #
+    # `db:use:postgres` runs on plain Node, not tsx, because devDependencies are
+    # pruned partway through and are never present at runtime.
     buildCommand: >-
       npm ci &&
       npm run db:use:postgres -w server &&
       npm run db:generate:postgres -w server &&
       npm run build -w server &&
+      npm prune --omit=dev &&
       npm run db:push:postgres -w server
     startCommand: node server/dist/index.js
     healthCheckPath: /api/health
