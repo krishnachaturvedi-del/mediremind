@@ -1,0 +1,272 @@
+// MediRemind Prisma schema.
+//
+// Portability note: the schema intentionally avoids provider-specific features
+// (no native enums / Json / Decimal) so it works identically on SQLite
+// (development) and PostgreSQL (production). Allowed enum values are enforced
+// at the application layer with Zod (see server/src/validation.ts).
+//
+// To move to PostgreSQL:
+//   1. Set `provider = "postgresql"` below.
+//   2. Set DATABASE_URL in server/.env to a Postgres connection string.
+//   3. Run `npm run db:push -w server` (or create a migration with `prisma migrate dev`).
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite" // change to "postgresql" for production
+  url      = env("DATABASE_URL")
+}
+
+// ---------------------------------------------------------------- users
+
+model User {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  passwordHash String
+  name         String
+  // PATIENT | CHEMIST | CAREGIVER (validated in app layer)
+  role         String   @default("PATIENT")
+  phone        String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  medications        Medication[]
+  doseLogs           DoseLog[]
+  refillAlerts       RefillAlert[]
+  refillRequests     RefillRequest[]
+  notifications      Notification[]
+  ownedShop          ChemistShop?
+  patientChemistLink PatientChemist?
+  linksAsPatient     CaregiverLink[]       @relation("CaregiverPatient")
+  linksAsCaregiver   CaregiverLink[]       @relation("CaregiverCaregiver")
+  confirmedRefills   RefillTransaction[]
+  auditLogs          AuditLog[]
+
+  @@index([role])
+}
+
+// ------------------------------------------------------------- chemist shop
+
+model ChemistShop {
+  id            String   @id @default(cuid())
+  name          String
+  licenseNumber String   @unique
+  address       String
+  phone         String
+  // The registered chemist user who operates this shop.
+  ownerId       String   @unique
+  owner         User     @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  patientLinks PatientChemist[]
+  medications  Medication[]
+  refillRequests RefillRequest[]
+}
+
+// Patient chose a registered chemist shop (one active shop per patient).
+model PatientChemist {
+  id         String    @id @default(cuid())
+  patientId  String    @unique
+  patient    User      @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  chemistShopId String
+  chemistShop ChemistShop @relation(fields: [chemistShopId], references: [id], onDelete: Cascade)
+  // ACTIVE | REVOKED
+  status     String    @default("ACTIVE")
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+}
+
+// -------------------------------------------------------------- medication
+
+model Medication {
+  id           String   @id @default(cuid())
+  userId       String
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name         String
+  // Prescribed dose, e.g. 500 with doseUnit "mg".
+  doseAmount   Float
+  doseUnit     String
+  // How many units of `quantityUnit` one dose consumes (inventory deduction amount).
+  quantityPerDose Float @default(1)
+  // Unit the stock is counted in, e.g. "tablets", "ml".
+  quantityUnit String
+  // e.g. ONCE_DAILY, TWICE_DAILY, THREE_TIMES_DAILY, CUSTOM (times list below)
+  frequency    String
+  // Daily scheduled times as JSON array of "HH:mm" strings.
+  times        String
+  // Current remaining stock in `quantityUnit` units. >= 0 always.
+  currentQuantity Float @default(0)
+  // When currentQuantity <= refillThreshold a refill alert is raised.
+  refillThreshold Float @default(5)
+  startDate    DateTime
+  endDate      DateTime?
+  // Optional associated chemist shop for refill handling.
+  chemistShopId String?
+  chemistShop  ChemistShop? @relation(fields: [chemistShopId], references: [id], onDelete: SetNull)
+  // ACTIVE | PAUSED | ENDED (soft deactivation)
+  status       String   @default("ACTIVE")
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  doseLogs        DoseLog[]
+  refillAlerts    RefillAlert[]
+  refillRequests  RefillRequest[]
+  refillTransactions RefillTransaction[]
+
+  @@index([userId, status])
+}
+
+// ------------------------------------------------------------ dose logging
+
+model DoseLog {
+  id            String   @id @default(cuid())
+  medicationId  String
+  medication    Medication @relation(fields: [medicationId], references: [id], onDelete: Cascade)
+  userId        String
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  // The planned local time for this dose, ISO UTC timestamp.
+  scheduledAt   DateTime
+  // "YYYY-MM-DD" local date key, used for grouping/filtering.
+  dateKey       String
+  // "HH:mm" local scheduled time, used to de-duplicate per medication/day.
+  timeStr       String
+  // PENDING | TAKEN | SKIPPED  (SNOOZED is represented by snoozedUntil on a PENDING dose)
+  status        String   @default("PENDING")
+  // When the user performed the action (taken/skipped/snoozed).
+  actionAt      DateTime?
+  // Inventory adjustment applied by this dose (negative for taken doses).
+  quantityDelta Float    @default(0)
+  // Snooze target time while status stays PENDING.
+  snoozedUntil  DateTime?
+  // Last time a reminder notification was emitted (prevents duplicates).
+  reminderSentAt DateTime?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@unique([medicationId, dateKey, timeStr])
+  @@index([userId, dateKey])
+  @@index([status, scheduledAt])
+}
+
+// ------------------------------------------------------------ refill flow
+
+model RefillAlert {
+  id           String   @id @default(cuid())
+  medicationId String
+  medication   Medication @relation(fields: [medicationId], references: [id], onDelete: Cascade)
+  userId       String
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  quantityAtTrigger Float
+  threshold    Float
+  // OPEN | RESOLVED
+  status       String   @default("OPEN")
+  triggeredAt  DateTime @default(now())
+  resolvedAt   DateTime?
+  requestId    String?  @unique
+  request      RefillRequest? @relation(fields: [requestId], references: [id], onDelete: SetNull)
+
+  @@index([status, userId])
+}
+
+model RefillRequest {
+  id            String   @id @default(cuid())
+  medicationId  String
+  medication    Medication @relation(fields: [medicationId], references: [id], onDelete: Cascade)
+  userId        String
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  chemistShopId String
+  chemistShop   ChemistShop @relation(fields: [chemistShopId], references: [id], onDelete: Cascade)
+  // Quantity the patient hopes to receive (informational).
+  quantityRequested Float?
+  // PENDING | ACCEPTED | READY | COMPLETED | REJECTED | CANCELLED
+  status        String   @default("PENDING")
+  // AUTO (raised by threshold detection) | MANUAL (requested by patient)
+  origin        String   @default("MANUAL")
+  patientNote   String?
+  rejectReason  String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  alert       RefillAlert[]
+  transactions RefillTransaction[]
+
+  // One active (unresolved) request per medication at a time.
+  @@index([userId, status])
+  @@index([chemistShopId, status])
+}
+
+model RefillTransaction {
+  id              String   @id @default(cuid())
+  // Unique per request: a request can be completed at most once -> duplicate
+  // confirmations are rejected by the database, not just application logic.
+  refillRequestId String   @unique
+  refillRequest   RefillRequest @relation(fields: [refillRequestId], references: [id], onDelete: Cascade)
+  medicationId    String
+  medication      Medication @relation(fields: [medicationId], references: [id], onDelete: Cascade)
+  quantitySupplied Float
+  // The chemist user who confirmed the transaction.
+  chemistUserId   String
+  chemist         User     @relation(fields: [chemistUserId], references: [id])
+  confirmedAt     DateTime @default(now())
+}
+
+// ------------------------------------------------------------- caregivers
+
+model CaregiverLink {
+  id         String   @id @default(cuid())
+  patientId  String
+  patient    User     @relation("CaregiverPatient", fields: [patientId], references: [id], onDelete: Cascade)
+  caregiverId String
+  caregiver  User     @relation("CaregiverCaregiver", fields: [caregiverId], references: [id], onDelete: Cascade)
+  // PENDING | ACTIVE | REVOKED
+  status     String   @default("PENDING")
+  // Consent scopes granted by the patient.
+  shareAdherence  Boolean @default(true)
+  shareMissed     Boolean @default(true)
+  shareUpcoming   Boolean @default(true)
+  shareRefills    Boolean @default(true)
+  shareInventory  Boolean @default(false)
+  invitedByEmail  String?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@unique([patientId, caregiverId])
+  @@index([caregiverId, status])
+}
+
+// ---------------------------------------------------------- notifications
+
+model Notification {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  // DOSE_REMINDER | REFILL_ALERT | REFILL_UPDATE | CAREGIVER | GENERAL
+  type      String   @default("GENERAL")
+  title     String
+  body      String
+  link      String?
+  read      Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  @@index([userId, read, createdAt])
+}
+
+// ------------------------------------------------------------ audit trail
+
+model AuditLog {
+  id        String   @id @default(cuid())
+  userId    String?
+  user      User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+  action    String
+  entity    String?
+  entityId  String?
+  details   String?
+  ip        String?
+  createdAt DateTime @default(now())
+
+  @@index([userId, createdAt])
+  @@index([action, createdAt])
+}
