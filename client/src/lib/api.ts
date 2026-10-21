@@ -21,10 +21,17 @@ export class ApiError extends Error {
   }
 }
 
+/**
+ * Base URL for the API. Empty in development (the Vite proxy serves /api on the
+ * same origin). In production it is set via VITE_API_BASE_URL when the client
+ * and API are deployed on different domains.
+ */
+export const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL ?? "").replace(/\/$/, "");
+
 async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   let res: Response;
   try {
-    res = await fetch(path, {
+    res = await fetch(API_BASE_URL + path, {
       credentials: "include",
       headers: { "Content-Type": "application/json", ...(options.headers ?? {}) },
       ...options,

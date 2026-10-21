@@ -1,0 +1,52 @@
+# Render Blueprint for the MediRemind API + PostgreSQL database.
+#
+# Usage: Render dashboard -> New -> Blueprint -> point at this repo.
+# Secrets marked `sync: false` are prompted for in the Render UI and never
+# committed to the repo.
+
+databases:
+  - name: mediremind-db
+    databaseName: mediremind
+    user: mediremind
+    plan: free
+    region: frankfurt
+
+services:
+  - type: web
+    name: mediremind-api
+    runtime: node
+    plan: free
+    region: frankfurt
+    rootDir: .
+    # Install both workspaces, generate the Postgres Prisma client, build the
+    # server, then push the schema to the database before starting.
+    buildCommand: >-
+      npm ci &&
+      npm run db:use:postgres -w server &&
+      npm run db:generate:postgres -w server &&
+      npm run build -w server &&
+      npm run db:push:postgres -w server
+    startCommand: node server/dist/index.js
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      # Wired automatically from the managed database above.
+      - key: DATABASE_URL
+        fromDatabase:
+          name: mediremind-db
+          property: connectionString
+      - key: SESSION_SECRET
+        generateValue: true
+      # Set to your deployed client origin, e.g. https://mediremind.netlify.app
+      - key: CORS_ORIGIN
+        sync: false
+      # Cross-domain cookies need SameSite=None; Secure.
+      - key: COOKIE_SAME_SITE
+        value: none
+      - key: RATE_LIMIT_WINDOW_MS
+        value: "900000"
+      - key: RATE_LIMIT_MAX
+        value: "300"
+      - key: AUTH_RATE_LIMIT_MAX
+        value: "20"

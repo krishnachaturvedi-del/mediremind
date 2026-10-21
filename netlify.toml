@@ -1,0 +1,14 @@
+[build]
+  # Install from the repo root (npm workspaces), then build the client workspace.
+  base = "."
+  command = "npm ci && npm run build -w client"
+  publish = "client/dist"
+
+[build.environment]
+  NODE_VERSION = "22"
+
+# SPA fallback: React Router handles client-side routes such as /app/dashboard.
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200

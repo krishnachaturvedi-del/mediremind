@@ -23,8 +23,9 @@ authorization, and automated tests. It is **not** a static mock-up or a landing 
 9. [Roles & permissions](#roles--permissions)
 10. [API reference](#api-reference)
 11. [Database: SQLite (dev) vs PostgreSQL (production)](#database-sqlite-dev-vs-postgresql-production)
-12. [Honest limitations](#honest-limitations)
-13. [What is intentionally out of scope](#what-is-intentionally-out-of-scope)
+12. [Deploying](#deploying)
+13. [Honest limitations](#honest-limitations)
+14. [What is intentionally out of scope](#what-is-intentionally-out-of-scope)
 
 ---
 
@@ -35,7 +36,8 @@ Everything listed here was exercised end-to-end in a browser against the running
 **Authentication & accounts**
 
 - Email + password registration and login (bcrypt, 12 rounds; only the hash is stored).
-- Session-based auth via `express-session` with `httpOnly`, `sameSite=lax` cookies.
+- Session-based auth via `express-session` with `httpOnly` cookies (`sameSite=lax` in
+  development, `sameSite=none` + `secure` in production for cross-domain deployments).
 - Rate limiting on authentication routes.
 - Password change (requires the current password) and profile editing.
 - Login failures never reveal whether an email address exists.
@@ -160,19 +162,26 @@ every screen in a realistic state. Sign in as the chemist at `/chemist`.
 ## Environment variables
 
 A development `server/.env` is included with safe local defaults, so the app runs as-is.
-All values it sets are listed below. In production you must supply your own
-`SESSION_SECRET` and `DATABASE_URL`.
+All values it sets are listed below. In production the app **refuses to start** without a
+PostgreSQL `DATABASE_URL` and a real `SESSION_SECRET` (see `server/src/config.ts`).
 
 | Variable | Development default | Purpose |
 |----------|--------------------|---------|
-| `DATABASE_URL` | `file:./dev.db` | Database connection string |
+| `DATABASE_URL` | `file:./dev.db` | Database connection string; **must be a `postgresql://` URL in production** |
 | `PORT` | `3001` | API port |
-| `NODE_ENV` | `development` | Environment name; `production` enables stricter cookie settings |
-| `SESSION_SECRET` | dev placeholder | **Must be set to a long random value in production** |
+| `NODE_ENV` | `development` | Environment name; `production` enables secure cookies, the Postgres session store, and config validation |
+| `SESSION_SECRET` | dev placeholder | **Must be a long random value in production** (boot fails otherwise) |
 | `CORS_ORIGIN` | `http://localhost:5173,http://localhost:4173` | Comma-separated list of allowed origins |
+| `COOKIE_SAME_SITE` | `lax` (`none` when `NODE_ENV=production`) | Set to `none` when the client is on a different domain than the API |
 | `RATE_LIMIT_WINDOW_MS` | `900000` | Rate-limit window (15 min) |
 | `RATE_LIMIT_MAX` | `300` | Max requests per window |
 | `AUTH_RATE_LIMIT_MAX` | `20` | Max auth requests per window |
+
+The client reads one optional build-time variable:
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `VITE_API_BASE_URL` | empty (same origin) | API base URL, e.g. `https://mediremind-api.onrender.com`. Required when the client and API are on different domains (also used for the CSV export link). |
 
 ---
 
@@ -361,20 +370,49 @@ All endpoints are under `/api`. Authentication is via session cookie.
 ## Database: SQLite (dev) vs PostgreSQL (production)
 
 Development uses **SQLite** (`server/prisma/dev.db`) so the project runs with zero external
-services. The schema is written to stay portable to **PostgreSQL**:
+services. For **production** a PostgreSQL schema is provided and both are generated from one
+source of truth.
+
+`server/prisma/schema.prisma` is the SQLite schema and the single source of truth.
+`schema.postgres.prisma` is generated from it (only the `provider` line differs):
+
+```bash
+cd server
+npm run db:use:postgres   # regenerate schema.postgres.prisma from schema.prisma
+npm run db:push:postgres  # create tables in the Postgres database
+```
+
+The schema stays portable to PostgreSQL because:
 
 - No native enums, `Json`, or `Decimal` columns are used; allowed values are enforced with
   Zod and documented in `schema.prisma` comments.
 - Identifiers use CUIDs rather than auto-increment integers.
 - All monetary/quantity math uses plain integers/floats with explicit rounding.
 
-To move to PostgreSQL: change `provider` in `schema.prisma` from `"sqlite"` to
-`"postgresql"`, point `DATABASE_URL` at your database, then run `npx prisma db push` (or
-generate migrations). The application code does not need changes.
-
 One SQLite-specific note is already handled in the code: nested interactive transactions
 must use the transaction client (`tx`) rather than the global Prisma client, which
-otherwise deadlocks on SQLite. The services do this consistently.
+otherwise deadlocks on SQLite. The services do this consistently. (PostgreSQL tolerates the
+global client, but the same code works on both.)
+
+See **[DEPLOYMENT.md](DEPLOYMENT.md)** for the full Render + Netlify walkthrough.
+
+---
+
+## Deploying
+
+The repo ships deployment configuration for a two-service setup:
+
+- **`render.yaml`** — Render blueprint: a free PostgreSQL database plus the API web
+  service (builds the Postgres schema, pushes tables, exposes `/api/health`).
+- **`netlify.toml`** — Netlify config for the static client (SPA redirects, build
+  command, publish directory).
+
+Full instructions, including the production environment variables and a troubleshooting
+table, are in **[DEPLOYMENT.md](DEPLOYMENT.md)**.
+
+Note: the Postgres deployment path is implemented and schema-validated, but has **not been
+run against a live PostgreSQL server** during development (no Postgres was available in the
+development environment). See [Honest limitations](#honest-limitations).
 
 ---
 
@@ -382,16 +420,25 @@ otherwise deadlocks on SQLite. The services do this consistently.
 
 These are real constraints of this build, documented rather than papered over.
 
-- **Sessions are stored in memory** (`memorystore`, pinned to development). Restarting the
-  server signs everyone out, and it does not work across multiple server instances. Use a
-  shared session store (e.g. Redis) before running more than one process.
+- **PostgreSQL is supported but not verified here.** The Postgres schema and session store
+  are implemented and validated (`prisma validate`), but this project was developed and
+  tested against SQLite only, because no PostgreSQL server was available in the development
+  environment. Treat the Postgres path as untested-in-anger until you run it once yourself.
+- **Sessions are in memory in development** (`memorystore`). In production the app uses a
+  PostgreSQL-backed store (`connect-pg-simple`, table `user_sessions`) so sessions survive
+  restarts, and it refuses to start in production without a PostgreSQL `DATABASE_URL` and a
+  real `SESSION_SECRET`. Development still signs everyone out on restart.
 - **Reminders are in-process.** The scheduler runs inside the API process and produces
   in-app notifications. There is no email, SMS, or push delivery, and no guarantee a
   reminder fires exactly on time — precision depends on the host staying up and the poll
   interval.
-- **No TLS in this setup.** Cookies are `httpOnly` and `sameSite=lax`, and the app is ready
-  for HTTPS, but terminating TLS is the deployment environment's job. Set a strong
-  `SESSION_SECRET` and serve over HTTPS in any real deployment.
+- **No CSRF tokens.** Cross-site POSTs are mitigated by cookie `SameSite` attributes
+  (`lax` in development, `none` + `secure` in production, where `SameSite=none` offers no
+  CSRF protection on its own). There is no token-based CSRF defence; add one before
+  handling anything sensitive.
+- **TLS is the deployment's job.** Cookies are `httpOnly` and `secure` in production, so the
+  app expects to be served over HTTPS. Terminating TLS (and setting a strong
+  `SESSION_SECRET`) is the host's responsibility; this repo does not include certificates.
 - **Chemist provisioning is a CLI script**, standing in for an administrative back office.
   There is no admin UI.
 - **No load or penetration testing has been performed.** The test suite covers behaviour and

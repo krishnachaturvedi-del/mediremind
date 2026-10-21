@@ -6,10 +6,10 @@ import { log } from "./lib/audit.js";
 const app = createApp();
 
 app.listen(config.port, () => {
-  log("info", `MediRemind API listening on http://localhost:${config.port}`);
+  log("info", `MediRemind API listening on port ${config.port}`);
   log(
     "info",
-    `Session store: in-memory (development). NODE_ENV=${config.nodeEnv}`
+    `Session store: ${config.isProduction ? "PostgreSQL-backed" : "in-memory (development)"}. NODE_ENV=${config.nodeEnv}`
   );
   startScheduler();
 });

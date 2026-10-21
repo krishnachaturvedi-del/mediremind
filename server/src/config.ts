@@ -25,3 +25,39 @@ export const config = {
     authMax: Number(required("AUTH_RATE_LIMIT_MAX", "20")),
   },
 };
+
+const DEV_SESSION_SECRET =
+  "dev-only-insecure-secret-change-me-before-production-0123456789";
+
+/**
+ * Fail fast on production misconfiguration.
+ *
+ * A checked-in `.env` (or any local .env) can silently supply development values
+ * in a production process, which would leave the app on SQLite and in-memory
+ * sessions. Validate explicitly rather than degrading quietly.
+ */
+function assertProductionConfig(): void {
+  if (!config.isProduction) return;
+
+  const problems: string[] = [];
+
+  if (!process.env.DATABASE_URL) {
+    problems.push("DATABASE_URL is required (PostgreSQL connection string).");
+  } else if (!/^postgres(ql)?:\/\//.test(process.env.DATABASE_URL)) {
+    problems.push(
+      `DATABASE_URL must be a PostgreSQL URL in production (got "${process.env.DATABASE_URL.split(":")[0]}:..."). SQLite is not supported in production.`
+    );
+  }
+
+  if (!process.env.SESSION_SECRET || config.sessionSecret === DEV_SESSION_SECRET) {
+    problems.push("SESSION_SECRET must be set to a strong, unique value.");
+  }
+
+  if (problems.length > 0) {
+    throw new Error(
+      `Invalid production configuration:\n  - ${problems.join("\n  - ")}`
+    );
+  }
+}
+
+assertProductionConfig();

@@ -9,7 +9,7 @@ import {
   Clock3,
   RefreshCcw,
 } from "lucide-react";
-import { api, ApiError } from "../lib/api";
+import { api, ApiError, API_BASE_URL } from "../lib/api";
 import type { Medication, ReportRow, ReportSummary, RefillRequest } from "../lib/types";
 import { formatDateLabel, shiftDateKey, todayKey } from "../lib/utils";
 import {
@@ -81,7 +81,7 @@ export default function HistoryPage() {
     const q = new URLSearchParams({ from, to });
     if (status !== "ALL") q.set("status", status);
     if (medicationId !== "ALL") q.set("medicationId", medicationId);
-    return `/api/reports/doses.csv?${q}`;
+    return `${API_BASE_URL}/api/reports/doses.csv?${q}`;
   };
 
   const maxTrend = Math.max(1, ...trend.map((t) => t.taken + t.skipped + t.pending));

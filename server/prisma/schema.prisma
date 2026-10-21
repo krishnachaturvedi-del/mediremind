@@ -5,17 +5,16 @@
 // (development) and PostgreSQL (production). Allowed enum values are enforced
 // at the application layer with Zod (see server/src/validation.ts).
 //
-// To move to PostgreSQL:
-//   1. Set `provider = "postgresql"` below.
-//   2. Set DATABASE_URL in server/.env to a Postgres connection string.
-//   3. Run `npm run db:push -w server` (or create a migration with `prisma migrate dev`).
+// To move to PostgreSQL: run `npm run db:use:postgres` (see server/prisma/README),
+// which switches the datasource provider below, or edit it by hand and run
+// `npm run db:push -w server` with a Postgres DATABASE_URL.
 
 generator client {
   provider = "prisma-client-js"
 }
 
 datasource db {
-  provider = "sqlite" // change to "postgresql" for production
+  provider = "sqlite" // production: "postgresql"
   url      = env("DATABASE_URL")
 }
 
